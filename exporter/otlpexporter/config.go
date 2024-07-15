@@ -27,13 +27,30 @@ type Config struct {
 }
 
 func (c *Config) Validate() error {
-	endpoint := c.sanitizedEndpoint()
-	if endpoint == "" {
+	hostport := c.Endpoint
+	sanitizedEndpoint, scheme := c.sanitizedEndpoint()
+	if sanitizedEndpoint == "" {
 		return errors.New(`requires a non-empty "endpoint"`)
 	}
+	if scheme == "dns" {
+		validDnsRegex := regexp.MustCompile("^dns://.*/(.+)")
+		if !validDnsRegex.Match([]byte(c.Endpoint)) {
+			return fmt.Errorf("invalid dns scheme format")
+		}
+		matches := validDnsRegex.FindStringSubmatch(c.Endpoint)
+		if len(matches) > 1 && matches[1] != "" {
+			hostport = matches[1]
+		}
+	}
 
+	hostport = sanitizedEndpoint
+	// validate host and post exist next to each other. example <host>:<port>/foo/bar
+	idx := strings.Index(sanitizedEndpoint, "/")
+	if idx > -1 && (scheme == "http" || scheme == "https") {
+		hostport = sanitizedEndpoint[:idx]
+	}
 	// Validate that the port is in the address
-	_, port, err := net.SplitHostPort(endpoint)
+	_, port, err := net.SplitHostPort(hostport)
 	if err != nil {
 		return err
 	}
@@ -44,18 +61,39 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-func (c *Config) sanitizedEndpoint() string {
-	switch {
-	case strings.HasPrefix(c.Endpoint, "http://"):
-		return strings.TrimPrefix(c.Endpoint, "http://")
-	case strings.HasPrefix(c.Endpoint, "https://"):
-		return strings.TrimPrefix(c.Endpoint, "https://")
-	case strings.HasPrefix(c.Endpoint, "dns://"):
-		r := regexp.MustCompile("^dns://[/]?")
-		return r.ReplaceAllString(c.Endpoint, "")
-	default:
-		return c.Endpoint
+// sanitizedEndpoint returns two params
+//
+// 1. sanaitized endpoint: An endpoint with the scheme part removed (Only if scheme is http or https or dns).
+// Example: For the string "<scheme>://<host>:<port>", it returns "<host>:<port>"
+//
+// 2. Scheme: Scheme of the endpoint. Example: For the string "<scheme>://<host>:<port>", it returns <scheme>.
+// It returns empty scheme if the scheme is not present in the endpoint.
+//
+// Example:
+//
+//   - "dns://authority/backend.example.com:4317"       --> "dns"
+//   - "dns://backend.example.com:4317"                 --> "dns"
+//   - "dns:///backend.example.com:8080"                --> "dns"
+//   - "dns://my-backend:4317"                          --> "dns"
+//   - "http://backend.example.com:4317"                --> "http"
+//   - "https://backend.example.com:4317"               --> "https"
+//   - "uds:///run/containerd/containerd.sock"          --> "uds"
+//   - "xds:///wallet.grpcwallet.io"                    --> "xds"
+//   - "ipv4:198.51.100.123:50051"                      --> ""
+func (c *Config) sanitizedEndpoint() (string, string) {
+	scheme := ""
+	sanitizedEndpoint := c.Endpoint
+	sanatizeSchemeRegexp := regexp.MustCompile(`(^[a-z]*):[\/]*`)
+	matches := sanatizeSchemeRegexp.FindStringSubmatch(c.Endpoint)
+	if len(matches) > 1 {
+		scheme = matches[1]
 	}
+	// Preserving existing behavouir. Trim only in case of "http", "https" and "dns". Ref:
+	if scheme == "http" || scheme == "https" || scheme == "dns" {
+		sanitizedEndpoint = sanatizeSchemeRegexp.ReplaceAllString(sanitizedEndpoint, "")
+	}
+	return sanitizedEndpoint, scheme
+
 }
 
 var _ component.Config = (*Config)(nil)

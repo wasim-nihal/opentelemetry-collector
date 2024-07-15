@@ -136,15 +136,32 @@ func TestValidDNSEndpoint(t *testing.T) {
 	cfg := factory.CreateDefaultConfig().(*Config)
 	cfg.Endpoint = "dns://authority/backend.example.com:4317"
 	assert.NoError(t, cfg.Validate())
+	cfg.Endpoint = "backend.example.com:4317"
+	assert.NoError(t, cfg.Validate())
+	// validate invalid endpoints. See https://github.com/open-telemetry/opentelemetry-collector/issues/10488#event-13446105379
+	cfg.Endpoint = "http://backend.example.com/something/foo:4317"
+	assert.EqualError(t, cfg.Validate(), "address backend.example.com: missing port in address")
+	cfg.Endpoint = "dns://authority/my-backend"
+	assert.EqualError(t, cfg.Validate(), "address authority/my-backend: missing port in address")
+	cfg.Endpoint = "dns:backend.example.com"
+	assert.EqualError(t, cfg.Validate(), "invalid dns scheme format")
+	cfg.Endpoint = "backend.example.com"
+	assert.EqualError(t, cfg.Validate(), "address backend.example.com: missing port in address")
 }
 
 func TestSanitizeEndpoint(t *testing.T) {
 	factory := NewFactory()
 	cfg := factory.CreateDefaultConfig().(*Config)
 	cfg.Endpoint = "dns://authority/backend.example.com:4317"
-	assert.Equal(t, "authority/backend.example.com:4317", cfg.sanitizedEndpoint())
+	sanatizedEndpoint, scheme := cfg.sanitizedEndpoint()
+	assert.Equal(t, "authority/backend.example.com:4317", sanatizedEndpoint)
+	assert.Equal(t, "dns", scheme)
 	cfg.Endpoint = "dns:///backend.example.com:4317"
-	assert.Equal(t, "backend.example.com:4317", cfg.sanitizedEndpoint())
+	sanatizedEndpoint, scheme = cfg.sanitizedEndpoint()
+	assert.Equal(t, "backend.example.com:4317", sanatizedEndpoint)
+	assert.Equal(t, "dns", scheme)
 	cfg.Endpoint = "dns:////backend.example.com:4317"
-	assert.Equal(t, "/backend.example.com:4317", cfg.sanitizedEndpoint())
+	sanatizedEndpoint, scheme = cfg.sanitizedEndpoint()
+	assert.Equal(t, "backend.example.com:4317", sanatizedEndpoint)
+	assert.Equal(t, "dns", scheme)
 }
